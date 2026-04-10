@@ -2,8 +2,8 @@
 'use strict';
 
 const { spawn } = require('child_process');
-const { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } = require('fs');
-const { join, resolve } = require('path');
+const { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, statSync } = require('fs');
+const { join, resolve, extname } = require('path');
 
 // ─── Arg Parsing ─────────────────────────────────────────────────────────────
 
@@ -23,7 +23,7 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
-const OUTPUT_DIR = join(process.env.HOME, 'ai-outputs');
+const OUTPUT_DIR = join(__dirname, 'ai-outputs');
 
 // ─── --list mode ─────────────────────────────────────────────────────────────
 
@@ -69,6 +69,49 @@ if (flags['context-file']) {
   } catch { console.error(`[warn] Cannot read context file: ${flags['context-file']}`); }
 }
 
+// Read context directory
+if (flags['context-dir']) {
+  const dirPath = resolve(flags['context-dir']);
+  const glob = flags['glob'] || '*.md';
+  const exts = (() => {
+    const base = glob.split('/').pop();
+    const m1 = base.match(/\*\.(\w+)$/);
+    if (m1) return [`.${m1[1]}`];
+    const m2 = base.match(/\*\.\{([^}]+)\}/);
+    if (m2) return m2[1].split(',').map(e => `.${e.trim()}`);
+    return null; // null = all files
+  })();
+
+  try {
+    const entries = readdirSync(dirPath, { recursive: true });
+    const files = entries
+      .map(f => join(dirPath, f))
+      .filter(f => { try { return statSync(f).isFile(); } catch { return false; } })
+      .filter(f => !exts || exts.includes(extname(f).toLowerCase()));
+
+    const MAX_CHARS = 30000;
+    let total = 0;
+    const parts = [];
+    for (const fp of files) {
+      if (total >= MAX_CHARS) break;
+      try {
+        const rel = fp.slice(dirPath.length + 1);
+        const content = readFileSync(fp, 'utf8');
+        const chunk = `### ${rel}\n${content.slice(0, MAX_CHARS - total)}`;
+        parts.push(chunk);
+        total += chunk.length;
+      } catch { /* skip unreadable */ }
+    }
+
+    if (parts.length > 0) {
+      userPrompt = `${userPrompt}\n\n<context-dir path="${flags['context-dir']}" files="${parts.length}" chars="${total}">\n${parts.join('\n\n')}\n</context-dir>`;
+      process.stderr.write(`[braintrust] Loaded ${parts.length} file(s) from ${flags['context-dir']} (${total} chars, pattern: ${glob})\n`);
+    } else {
+      console.error(`[warn] No files matched pattern "${glob}" in ${flags['context-dir']}`);
+    }
+  } catch (e) { console.error(`[warn] Cannot read context-dir: ${e.message}`); }
+}
+
 if (!userPrompt) {
   console.error('Usage: braintrust [options] "your question"');
   console.error('       cat file | braintrust "explain this"');
@@ -79,6 +122,8 @@ if (!userPrompt) {
   console.error('  --timeout <sec>     Per-model timeout in seconds (default: 120)');
   console.error('  --dir <path>        Working directory for CLI tools');
   console.error('  --context-file <f>  Append file content as context (max 8000 chars)');
+  console.error('  --context-dir <d>   Append all matching files from a directory as context');
+  console.error('  --glob <pattern>    File pattern for --context-dir (default: *.md)');
   console.error('  --no-save           Do not save results to disk');
   console.error('  --json              Print full JSON result to stdout');
   console.error('  --list              List recent runs');
@@ -381,7 +426,7 @@ async function main() {
   if (!noJudge && validResults.length >= 2) {
     judgeOutput = await runJudge(userPrompt, validResults);
     console.log('\n' + '═'.repeat(60));
-    console.log('\n# 🧠 BRANTRUST — 智囊团融合报告\n');
+    console.log('\n# 🧠 BRAINTRUST — 智囊团融合报告\n');
     console.log(judgeOutput);
   } else if (!noJudge && validResults.length < 2) {
     console.log('\n[braintrust] Not enough successful responses for Judge (need ≥ 2).');
