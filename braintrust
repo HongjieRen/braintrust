@@ -364,6 +364,26 @@ function saveArtifacts(runDir, question, raws, results, judgeOutput) {
     lines.push(judgeOutput);
   }
   writeFileSync(join(runDir, 'report.md'), lines.join('\n'));
+
+  // summary.md — question + judge only, for token-efficient context loading
+  const summaryLines = [
+    `**问题**: ${question}`,
+    `**时间**: ${new Date().toISOString()}`,
+    '',
+  ];
+  if (judgeOutput) {
+    summaryLines.push(judgeOutput);
+  } else {
+    // no judge: write key_claims from each model
+    for (const r of results) {
+      if (!r.error && r.key_claims.length) {
+        summaryLines.push(`## ${r.provider}`);
+        summaryLines.push(r.key_claims.join('\n'));
+        summaryLines.push('');
+      }
+    }
+  }
+  writeFileSync(join(runDir, 'summary.md'), summaryLines.join('\n'));
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
