@@ -1,0 +1,19 @@
+{
+  "name": "braintrust",
+  "version": "0.1.0",
+  "description": "Multi-model AI fusion CLI — self-evolving",
+  "bin": {
+    "braintrust": "./bin/braintrust"
+  },
+  "main": "src/main.js",
+  "scripts": {
+    "test": "node --test src/normalize.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}

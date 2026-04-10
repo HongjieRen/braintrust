@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+'use strict';
+
+// Shim: delegates to src/main.js
+// The symlink ~/.local/bin/braintrust → this file remains unchanged.
+
+const { main } = require('../src/main.js');
+
+main(process.argv.slice(2)).catch(e => {
+  process.stderr.write(`[braintrust error] ${e.message}\n`);
+  process.exit(1);
+});
