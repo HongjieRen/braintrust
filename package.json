@@ -1,12 +1,19 @@
 {
-  "name": "braintrust",
+  "name": "braintrust-lite",
   "version": "0.1.0",
-  "description": "Multi-model AI fusion CLI — self-evolving",
+  "description": "Multi-model AI consultation MCP for Claude Code — runs Claude, Codex, and Gemini in parallel for Judge-style synthesis",
   "bin": {
+    "braintrust-lite": "./src/server.js",
     "braintrust": "./bin/braintrust",
     "braintrust-doctor": "./src/doctor.js"
   },
   "main": "src/main.js",
+  "files": [
+    "src/",
+    "skills/",
+    "bin/",
+    "README.md"
+  ],
   "scripts": {
     "test": "node --test src/normalize.test.js"
   },
@@ -15,6 +22,19 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "multi-model",
+    "ai",
+    "codex",
+    "gemini",
+    "braintrust"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HongjieRen/braintrust.git"
   },
   "license": "MIT"
 }
