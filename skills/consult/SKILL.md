@@ -1,6 +1,6 @@
 ---
 name: consult
-version: 1.5.0
+version: 1.5.1
 description: 在处理规划/设计/架构/调研类任务时，并发调用 codex + gemini + claude 获取多视角，主 Claude 担任 Judge 盲评综合输出。支持渐进式多轮对话和自动更新。
 ---
 
@@ -177,7 +177,10 @@ Current best: <当前推荐方案一句话>
 !deep     切换到完整记忆（带最近1轮 REASONING + TRADEOFFS，适合复杂设计）
 /done     退出 Consult 会话模式（!stop 同效）
 !deltas   展开本轮三模型核心主张各一句（不显示原文全文）
-!raw      重新调用 consult(show_raw:true)，展示三模型完整原始回答（不经 Judge）
+!raw      旁路展示本轮三模型原文（使用 REVEAL 映射表替换为真实模型名）。
+          约束：① 不重新调用 consult，仅复用主 Claude 已持有的本轮回答；
+                ② 不推进 R{N}，不更新 Session State，不写入 Decisions/Open；
+                ③ 展示完即结束本次响应，下一轮 follow-up 仍按原 Session State 继续。
 ```
 
 ---
@@ -194,7 +197,8 @@ show_raw    (可选) 默认 false；传 true = 直接展示三模型原始回答
 cwd         (可选) 子进程工作目录
 ```
 
-**`show_raw: true` 使用场景**：用户说"让我自己看看三个模型分别说了什么"、"不用总结，直接给我原文"时，用此参数替代默认的 Judge 流程。
+**`show_raw: true` 使用场景**：终端 CLI 或独立一次性查询。  
+**注**：主 Claude 在 `/consult` 多轮场景中**不要**主动设置 `show_raw: true`；用户想看原文时用 `!raw` 控制命令（旁路展示、不污染会话）。
 
 ## timeout 选择策略
 
