@@ -5,21 +5,23 @@ const { readFileSync, existsSync, readdirSync, statSync } = require('fs');
 const { join, resolve, extname } = require('path');
 
 const { OUTPUT_DIR, DEFAULT_TIMEOUT_S, DEFAULT_JUDGE_MODEL, MAX_CONTEXT_CHARS, CONTEXT_FILE_MAX } = require('./config.js');
-const { getActiveProviders } = require('./providers/index.js');
+const { PROVIDERS, getActiveProviders } = require('./providers/index.js');
+const { makeRunner } = require('./runner.js');
 const { normalize } = require('./normalize.js');
-const { runJudge } = require('./judge.js');
+const { JudgeProviderError, runJudge } = require('./judge.js');
 const { saveArtifacts } = require('./save.js');
 const { persistRun } = require('./memory/index.js');
 
 // ─── Arg Parsing ──────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  const flags = { skip: [], timeout: DEFAULT_TIMEOUT_S, 'judge-model': DEFAULT_JUDGE_MODEL };
+  const flags = { skip: [], with: [], timeout: DEFAULT_TIMEOUT_S, 'judge-model': DEFAULT_JUDGE_MODEL };
   const positional = [];
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--skip') { flags.skip.push(argv[++i]); continue; }
+    if (a === '--with') { flags.with.push(argv[++i]); continue; }
     if (a.startsWith('--no-')) { flags[a.slice(5)] = false; continue; }
     if (a.startsWith('--')) {
       const key = a.slice(2);
@@ -113,44 +115,17 @@ function handleListMode() {
   process.exit(0);
 }
 
-// ─── Process Runner ───────────────────────────────────────────────────────────
-
-function makeRunner(timeoutMs, workDir) {
-  return function runProcess(cmd, args, opts = {}) {
-    const ac = new AbortController();
-    const cwd = opts.cwd || workDir;
-    const proc = spawn(cmd, args, { signal: ac.signal, stdio: ['ignore', 'pipe', 'pipe'], cwd });
-    let stdout = '', stderr = '';
-    proc.stdout.on('data', d => { stdout += d; });
-    proc.stderr.on('data', d => { stderr += d; });
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
-    return new Promise(res => {
-      let resolved = false;
-      const done = (code, error_type = null) => {
-        if (resolved) return;
-        resolved = true;
-        clearTimeout(timer);
-        res({ stdout, stderr, code, error_type });
-      };
-      proc.on('close', code => done(code, code !== 0 ? 'nonzero' : null));
-      proc.on('error', err => {
-        if (err.name === 'AbortError') done('timeout', 'timeout');
-        else if (err.code === 'ENOENT') done(-1, 'enoent');
-        else done(-1, 'spawn_error');
-      });
-    });
-  };
-}
-
 // ─── Usage ────────────────────────────────────────────────────────────────────
 
 function printUsageAndExit() {
   process.stderr.write('Usage: braintrust [options] "your question"\n');
   process.stderr.write('       cat file | braintrust "explain this"\n');
   process.stderr.write('\nOptions:\n');
-  process.stderr.write('  --skip <model>      Skip a model (claude|codex|gemini), repeatable\n');
+  const providerNames = Object.keys(PROVIDERS).join('|');
+  process.stderr.write(`  --skip <model>      Skip a model (${providerNames}), repeatable\n`);
+  process.stderr.write('  --with <provider>   Add an optional provider, repeatable\n');
   process.stderr.write('  --no-judge          Show raw results only\n');
-  process.stderr.write('  --judge-model       Judge model: claude|codex|gemini (default: claude)\n');
+  process.stderr.write(`  --judge-model       Judge model: ${providerNames} (default: claude)\n`);
   process.stderr.write('  --timeout <sec>     Per-model timeout in seconds (default: 120)\n');
   process.stderr.write('  --dir <path>        Working directory for CLI tools\n');
   process.stderr.write('  --context-file <f>  Append file content as context (max 8000 chars)\n');
@@ -206,8 +181,12 @@ async function main(argv) {
   const noJudge = flags.judge === false;
   const noSave = flags.save === false;
 
-  const runProcess = makeRunner(timeoutMs, workDir);
-  const activeProviders = getActiveProviders(flags.skip);
+  if (!Object.hasOwn(PROVIDERS, judgeModel)) {
+    throw new Error(`Unknown judge model: ${judgeModel}. Use ${Object.keys(PROVIDERS).join('|')}.`);
+  }
+
+  const runner = makeRunner(timeoutMs, workDir);
+  const activeProviders = getActiveProviders(flags.skip, flags.with);
 
   // Load generator system prompt (Phase 0: always 'general' variant)
   const { buildGeneratorSystem } = require('./prompts/index.js');
@@ -221,7 +200,7 @@ async function main(argv) {
   activeProviders.forEach(p => { starts[p.name] = Date.now(); });
 
   const rawResults = await Promise.allSettled(
-    activeProviders.map(p => runProcess(p.cmd, p.getArgs(fullPrompt)))
+    activeProviders.map(p => p.run(fullPrompt, runner))
   );
 
   const raws = {};
@@ -230,7 +209,7 @@ async function main(argv) {
     const p = activeProviders[i];
     const raw = rawResults[i].status === 'fulfilled'
       ? rawResults[i].value
-      : { stdout: '', stderr: '', code: -1 };
+      : { stdout: '', stderr: '', code: -1, error_type: 'spawn_error' };
     raws[p.name] = raw;
     const ms = Date.now() - starts[p.name];
     const adapted = p.adapt(raw);
@@ -257,10 +236,15 @@ async function main(argv) {
   let judgeOutput = null;
   const validResults = results.filter(r => !r.error && r.content && r.content !== '[no output]');
   if (!noJudge && validResults.length >= 2) {
-    judgeOutput = await runJudge(userPrompt, validResults, { judgeModel, runProcess });
-    console.log('\n' + '═'.repeat(60));
-    console.log('\n# 🧠 BRAINTRUST — 智囊团融合报告\n');
-    console.log(judgeOutput);
+    try {
+      judgeOutput = await runJudge(userPrompt, validResults, { judgeModel, runner });
+      console.log('\n' + '═'.repeat(60));
+      console.log('\n# 🧠 BRAINTRUST — 智囊团融合报告\n');
+      console.log(judgeOutput);
+    } catch (err) {
+      if (!(err instanceof JudgeProviderError)) throw err;
+      process.stderr.write(`\n[braintrust] ⚠ Judge degraded: ${err.message}\n`);
+    }
   } else if (!noJudge && validResults.length < 2) {
     console.log('\n[braintrust] Not enough successful responses for Judge (need ≥ 2).');
   }

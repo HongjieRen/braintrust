@@ -1,7 +1,7 @@
 ---
 name: consult
-version: 1.5.2
-description: 在处理规划/设计/架构/调研类任务时，并发调用 codex + gemini + claude 获取多视角，主 Claude 担任 Judge 盲评综合输出。支持渐进式多轮对话和自动更新。
+version: 1.5.3
+description: 在处理规划/设计/架构/调研类任务时，并发调用默认核心 provider；可选 provider 仅由 with 显式启用。主 Claude 担任 Judge 盲评综合输出。
 ---
 
 # consult — 多模型旁路军师
@@ -29,7 +29,7 @@ curl -fsSL "https://raw.githubusercontent.com/HongjieRen/braintrust/main/skills/
 
 ## 这是什么
 
-`braintrust-lite` 提供的 MCP tool `mcp__braintrust_lite__consult` 会在后台并发调用 **Codex CLI**、**Gemini CLI** 和 **Claude CLI**，把三个顶尖模型的独立回答以匿名形式（Model A/B/C）交回给你。
+`braintrust-lite` 提供的 MCP tool `mcp__braintrust_lite__consult` 默认并发调用 **Codex CLI**、**Gemini CLI** 和 **Claude CLI**。`with` 可显式加入 Cursor、Kimi、DeepSeek 或 Grok；回答按 `Model {label}` 匿名返回。
 
 你（主 Claude）负责担任 Judge——盲评内容，提炼共识、标注独特洞见、裁决分歧，输出集大成方案。
 
@@ -61,12 +61,11 @@ curl -fsSL "https://raw.githubusercontent.com/HongjieRen/braintrust/main/skills/
 
 2. 等两者都返回后，你亲自担任 Judge（盲评流程）：
 
-   步骤一：只看 Model A/B/C 内容，按结构完成评估（见下方 Judge 输出格式）
+   步骤一：遍历所有返回的 `Model {label}` 内容，按结构完成评估（见下方 Judge 输出格式）
 
    步骤二：读 REVEAL 映射表
 
-   步骤三：在回复末尾揭晓：
-   "揭晓：Model A = Gemini，Model B = Claude，Model C = Codex"
+   步骤三：在回复末尾按 REVEAL 提供的完整 `{mapping}` 揭晓所有模型映射。
 ```
 
 ### Judge 输出格式（必须分节，供多轮渐进加载）
@@ -75,19 +74,17 @@ curl -fsSL "https://raw.githubusercontent.com/HongjieRen/braintrust/main/skills/
 
 ```
 ### PERSPECTIVES
-每个模型的核心立场，**逐模型列出**，不可合并，不可说"各模型均认为"：
-- **Model A**：[该模型最核心的2-3个主张 / 独特视角，用具体措辞引用原文观点]
-- **Model B**：[同上]
-- **Model C**：[同上]
+每个返回模型的核心立场，**逐模型列出**，不可合并，不可说"各模型均认为"。对每个返回的 label 重复以下条目：
+- **Model {label}**：[该模型最核心的2-3个主张 / 独特视角，用具体措辞引用原文观点]
 
 ### VERDICT
 <核心结论，1-3句。必须说明你采纳了哪个模型的哪个观点，以及理由>
 
 ### REASONING
 <深度推理。强制要求：
- 1. 至少引用2处模型间的具体分歧或差异（"Model A 认为X，Model B 认为Y，两者差异在于..."）
- 2. 对每个关键判断说明为什么选A而不选B/C（不允许只说"综合来看"）
- 3. 如果三模型观点一致，必须挖掘细节差异，或标注"三模型在X点上高度一致，其共同理由是...">
+ 1. 至少引用2处模型间的具体分歧或差异（"Model {label1} 认为X，Model {label2} 认为Y，两者差异在于..."）
+ 2. 对每个关键判断说明为什么采纳某个 `Model {label}` 的观点、而不采纳其它候选（不允许只说"综合来看"）
+ 3. 如果已选模型观点一致，必须挖掘细节差异，或标注"各模型在X点上高度一致，其共同理由是...">
 
 ### TRADEOFFS
 <权衡分析、已排除方案及理由，用户问"有没有其他方案"时加载>
@@ -96,7 +93,7 @@ curl -fsSL "https://raw.githubusercontent.com/HongjieRen/braintrust/main/skills/
 <未解决的分歧或待确认的假设，用户问"还有什么不确定"时加载>
 ```
 
-**PERSPECTIVES 的写法原则**：逐字从模型原文中提炼，不要意译或合并。如果 Model A 说"用 Redis 做 session"，就写"用 Redis 做 session"，不要写"推荐缓存方案"。
+**PERSPECTIVES 的写法原则**：逐字从模型原文中提炼，不要意译或合并。如果某个 `Model {label}` 说"用 Redis 做 session"，就写"用 Redis 做 session"，不要写"推荐缓存方案"。
 
 ---
 
@@ -108,7 +105,7 @@ curl -fsSL "https://raw.githubusercontent.com/HongjieRen/braintrust/main/skills/
 
 ```
 ┌─ Consult 会话已启动 ──────────────────────────────┐
-│ 模型：Codex · Gemini · Claude CLI                  │
+│ 模型：默认核心模型（及已启用可选模型）              │
 │                                                    │
 │ 退出会话：!done（或 !stop / 直接说"结束""退出"）   │
 │ 切换记忆：!brief | !deep                           │
@@ -124,13 +121,14 @@ curl -fsSL "https://raw.githubusercontent.com/HongjieRen/braintrust/main/skills/
 每轮 Judge 输出**最开始**，必须先输出这一行状态栏，再输出任何正文：
 
 ```
-[Consult·R{N} | 3 models | Consensus: {High/Split}]
+[Consult·R{round} | {selected} models | Consensus: {High/Split}]
 ```
 
-- `R{N}` = 第几轮，帮助用户感知多轮积累
+- `round` = 第几轮，帮助用户感知多轮积累
+- `selected` = 本轮实际选择的 provider 数量
 - `Consensus: Split` 时额外显示一行分歧摘要：`Note: split on <主要分歧点>`
 - 平时无分歧则只显示 `High`，不展开
-- 若模型降级（实际跑了少于 3 个），显示 `⚠ 2/3 models` 代替 `3 models`
+- 若模型降级，显示 `⚠ {successful}/{selected} models` 代替 `{selected} models`
 
 ### 多轮上下文：渐进式加载（核心设计）
 
@@ -156,13 +154,13 @@ Current best: <当前推荐方案一句话>
 | "为什么这样判断" | + 最近1轮 REASONING |
 | "有没有其他方案" | + 最近1轮 TRADEOFFS |
 | "还有什么不确定" | + 最近1轮 OPEN_QUESTIONS |
-| "刚才某模型说的那个点" | + 按需检索原文片段（Model A/B/C 原始回答存档备查） |
+| "刚才某模型说的那个点" | + 按需检索原文片段（各 `Model {label}` 原始回答存档备查） |
 
 历史 VERDICT 全部保留（每条 ~50 token），其余节只保留最近1-2轮，更老的丢弃。
 
 ### 自动降级
 
-用户回复是简单确认时（"好的"、"谢谢"、"明白了"等），**不触发三模型并发**，由主 Claude 直接响应，节省成本和延迟。
+用户回复是简单确认时（"好的"、"谢谢"、"明白了"等），**不触发多模型并发**，由主 Claude 直接响应，节省成本和延迟。
 
 判断标准：用户回复 < 20 字且不含实质性新问题。
 
@@ -193,10 +191,10 @@ Current best: <当前推荐方案一句话>
 
 **查看原文**
 ```
-!deltas   展开本轮三模型核心主张各一句（不显示原文全文）
-!raw      旁路展示本轮三模型原文（使用 REVEAL 映射表替换为真实模型名）。
+!deltas   展开本轮已选模型核心主张各一句（不显示原文全文）
+!raw      旁路展示本轮已选模型原文（使用 REVEAL 映射表替换为真实模型名）。
           约束：① 不重新调用 consult，仅复用主 Claude 已持有的本轮回答；
-                ② 不推进 R{N}，不更新 Session State，不写入 Decisions/Open；
+                ② 不推进 R{round}，不更新 Session State，不写入 Decisions/Open；
                 ③ 展示完即结束本次响应，下一轮 follow-up 仍按原 Session State 继续。
 ```
 
@@ -206,11 +204,12 @@ Current best: <当前推荐方案一句话>
 
 ```
 prompt      (必须) 问题，建议精炼、自包含，含必要上下文
-only        (可选) "codex" | "gemini" | "claude" — 只调用一个
-skip        (可选) ["codex"] | ["gemini"] | ["claude"] — 跳过某个
+only        (可选) "claude" | "codex" | "gemini" | "cursor" | "kimi" | "deepseek" | "grok" — 只调用一个
+skip        (可选) 上述 provider id 的数组 — 跳过已选 provider
+with        (可选) ["cursor", "kimi", "deepseek", "grok"] 的数组 — 显式加入可选 provider
 timeout_sec (可选) 每个模型超时秒数，默认 90；传 0 = 不限时等待完成
 blind       (可选) 默认 true；传 false 可直接看真实模型名称
-show_raw    (可选) 默认 false；传 true = 直接展示三模型原始回答，跳过 Judge 融合
+show_raw    (可选) 默认 false；传 true = 直接展示已选模型原始回答，跳过 Judge 融合
 cwd         (可选) 子进程工作目录
 ```
 
@@ -232,8 +231,8 @@ cwd         (可选) 子进程工作目录
 
 ## 成本与延迟
 
-- 每次 consult = 3 次 API 调用（codex + gemini + claude）
-- 延迟 = `max(三者响应时间)`（并发）
+- 默认每次 consult = 3 次 generator 调用（codex + gemini + claude）；每个 `with` provider 增加一次调用
+- 延迟 = `max(已选 provider 响应时间)`（并发）
 - 简单问题 ~$0.05–0.20，中等 ~$0.20–0.50
 - 自动降级（简单确认）= 0 次额外 API 调用
 

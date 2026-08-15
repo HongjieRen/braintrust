@@ -1,21 +1,17 @@
 'use strict';
 
 /**
- * Get CLI args for invoking gemini as a generator.
- * --allowed-mcp-server-names skips the broken feishu-mcp server that
- * causes ~15s startup delay and connection errors.
+ * Get CLI args for invoking Gemini through Antigravity CLI.
  * @param {string} fullPrompt - System + user prompt combined
  * @returns {string[]}
  */
 function getArgs(fullPrompt) {
-  return ['-p', fullPrompt, '-o', 'json', '--allowed-mcp-server-names', 'sequential-thinking'];
+  return ['-p', fullPrompt, '--output-format', 'json', '--disable-slash-commands'];
 }
 
 /**
- * Parse gemini's JSON stdout into { content, model, parse_mode }.
- * Gemini prepends an MCP status line before the JSON output:
- *   "MCP issues detected. Run /mcp list for status."
- * We skip to the first '{' to handle this.
+ * Parse Antigravity's JSON stdout into { content, model, parse_mode }.
+ * We scan complete JSON objects to tolerate warning lines before the payload.
  * @param {{ stdout: string, stderr: string, code: number|string }} raw
  * @returns {{ content: string, model: string, parse_mode: string }}
  */
@@ -29,35 +25,39 @@ function adapt(raw) {
 
 /**
  * Extract the response text from gemini's JSON output.
- * Handles potential JSON prefix noise using brace counter for robustness.
+ * Handles prefix noise and braces inside JSON strings.
  * @param {string} stdout
  * @returns {string|null}
  */
 function parseGeminiResponse(stdout) {
-  const jsonStart = stdout.indexOf('{');
-  if (jsonStart === -1) return null;
+  for (let start = stdout.indexOf('{'); start !== -1; start = stdout.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
 
-  // Use brace counter to find the complete JSON object
-  let depth = 0;
-  let jsonEnd = -1;
-  for (let i = jsonStart; i < stdout.length; i++) {
-    if (stdout[i] === '{') depth++;
-    else if (stdout[i] === '}') {
-      depth--;
-      if (depth === 0) { jsonEnd = i + 1; break; }
+    for (let i = start; i < stdout.length; i++) {
+      const char = stdout[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === '{') depth++;
+      else if (char === '}' && --depth === 0) {
+        try {
+          const j = JSON.parse(stdout.slice(start, i + 1));
+          if (Object.hasOwn(j, 'status') && j.status !== 'SUCCESS') return null;
+          if (typeof j.response === 'string') return j.response;
+          for (const v of Object.values(j)) {
+            if (v && typeof v === 'object' && typeof v.response === 'string') return v.response;
+          }
+        } catch { /* try the next object */ }
+        break;
+      }
     }
   }
-
-  const jsonStr = jsonEnd !== -1 ? stdout.slice(jsonStart, jsonEnd) : stdout.slice(jsonStart);
-  const j = JSON.parse(jsonStr);
-
-  if (j.response) return j.response;
-
-  // Handle nested response object
-  for (const v of Object.values(j)) {
-    if (v && typeof v === 'object' && typeof v.response === 'string') return v.response;
-  }
-
   return null;
 }
 

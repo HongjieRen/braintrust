@@ -4,6 +4,15 @@ const { PROVIDERS } = require('./providers/index.js');
 const { summarize } = require('./normalize.js');
 const { LESSONS_INJECT_LIMIT } = require('./config.js');
 
+class JudgeProviderError extends Error {
+  constructor(provider, errorType) {
+    super(`Judge ${provider} failed: ${errorType}`);
+    this.name = 'JudgeProviderError';
+    this.code = 'JUDGE_PROVIDER_FAILED';
+    this.error_type = errorType;
+  }
+}
+
 /**
  * Build the judge prompt, optionally injecting lessons from memory.
  * @param {string} question
@@ -61,12 +70,12 @@ function buildLessonsBlock(lessons) {
  * @param {Array} results - Normalized provider results
  * @param {object} opts
  * @param {string} [opts.judgeModel='claude'] - Which model to use as judge
- * @param {Function} opts.runProcess - The process runner function
+ * @param {object} opts.runner - Shared process/HTTP runner
  * @param {string[]} [opts.lessons] - Lessons to inject
  * @returns {Promise<string>}
  */
 async function runJudge(question, results, opts = {}) {
-  const { judgeModel = 'claude', runProcess, lessons = [] } = opts;
+  const { judgeModel = 'claude', runner, lessons = [] } = opts;
   const judgePrompt = buildJudgePrompt(question, results, { lessons });
 
   process.stderr.write(`\n[Judge (${judgeModel}): running...]\n`);
@@ -74,14 +83,17 @@ async function runJudge(question, results, opts = {}) {
 
   const provider = PROVIDERS[judgeModel];
   if (!provider) {
-    throw new Error(`Unknown judge model: ${judgeModel}. Use claude|codex|gemini.`);
+    throw new Error(`Unknown judge model: ${judgeModel}. Use ${Object.keys(PROVIDERS).join('|')}.`);
   }
 
-  const raw = await runProcess(provider.cmd, provider.getArgs(judgePrompt));
+  const raw = await provider.run(judgePrompt, runner);
+  if (raw.error_type) {
+    throw new JudgeProviderError(judgeModel, raw.error_type);
+  }
   const ms = Date.now() - start;
   process.stderr.write(`[Judge: done ${(ms / 1000).toFixed(1)}s]\n`);
 
   return provider.extractJudgeText(raw);
 }
 
-module.exports = { buildJudgePrompt, runJudge, buildLessonsBlock };
+module.exports = { JudgeProviderError, buildJudgePrompt, runJudge, buildLessonsBlock };
