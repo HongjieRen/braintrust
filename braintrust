@@ -207,12 +207,32 @@ function adaptCodex(raw) {
 }
 
 function parseGeminiResponse(stdout) {
-  const jsonStart = stdout.indexOf('{');
-  if (jsonStart === -1) return null;
-  const j = JSON.parse(stdout.slice(jsonStart));
-  if (j.response) return j.response;
-  for (const v of Object.values(j)) {
-    if (v && typeof v === 'object' && typeof v.response === 'string') return v.response;
+  for (let start = stdout.indexOf('{'); start !== -1; start = stdout.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < stdout.length; i++) {
+      const char = stdout[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === '{') depth++;
+      else if (char === '}' && --depth === 0) {
+        try {
+          const j = JSON.parse(stdout.slice(start, i + 1));
+          if (Object.hasOwn(j, 'status') && j.status !== 'SUCCESS') return null;
+          if (typeof j.response === 'string') return j.response;
+          for (const v of Object.values(j)) {
+            if (v && typeof v === 'object' && typeof v.response === 'string') return v.response;
+          }
+        } catch { /* try the next object */ }
+        break;
+      }
+    }
   }
   return null;
 }
@@ -313,7 +333,7 @@ async function runJudge(question, results) {
   } else if (judgeModel === 'codex') {
     raw = await runProcess('codex', ['exec', '--json', '--skip-git-repo-check', '--ephemeral', judgePrompt]);
   } else {
-    raw = await runProcess('gemini', ['-p', judgePrompt, '-o', 'json', '--allowed-mcp-server-names', 'sequential-thinking']);
+    raw = await runProcess('agy', ['-p', judgePrompt, '--output-format', 'json', '--disable-slash-commands']);
   }
 
   const ms = Date.now() - start;
@@ -404,8 +424,8 @@ async function main() {
     },
     {
       name: 'gemini',
-      cmd: 'gemini',
-      args: ['-p', `${GENERATOR_SYSTEM}\n\n${userPrompt}`, '-o', 'json', '--allowed-mcp-server-names', 'sequential-thinking'],
+      cmd: 'agy',
+      args: ['-p', `${GENERATOR_SYSTEM}\n\n${userPrompt}`, '--output-format', 'json', '--disable-slash-commands'],
       adapt: adaptGemini,
     },
   ].filter(p => !flags.skip.includes(p.name));

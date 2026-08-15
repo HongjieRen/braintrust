@@ -5,50 +5,21 @@
  * MCP server for braintrust-lite.
  *
  * Exposes one tool: `consult`
- * Runs Claude CLI, Codex CLI, and Gemini CLI in parallel, returns their
+ * Runs the selected provider CLIs/APIs in parallel, returns their
  * responses as Model A / B / C (blind by default) for the calling agent to judge.
  *
  * Protocol: JSON-RPC 2.0 over stdio, line-delimited.
  */
 
 const readline = require('readline');
-const { spawn } = require('child_process');
 const { resolve } = require('path');
 const { version: PKG_VERSION } = require('../package.json');
 
 const { DEFAULT_TIMEOUT_S } = require('./config.js');
-const { getActiveProviders } = require('./providers/index.js');
+const { PROVIDERS, getActiveProviders } = require('./providers/index.js');
+const { makeRunner } = require('./runner.js');
 const { normalize } = require('./normalize.js');
 const { buildGeneratorSystem } = require('./prompts/index.js');
-
-// ─── Process Runner ────────────────────────────────────────────────────────────
-
-function makeRunner(timeoutMs, workDir) {
-  return function runProcess(cmd, args, opts = {}) {
-    const ac = new AbortController();
-    const cwd = opts.cwd || workDir;
-    const proc = spawn(cmd, args, { signal: ac.signal, stdio: ['ignore', 'pipe', 'pipe'], cwd });
-    let stdout = '', stderr = '';
-    proc.stdout.on('data', d => { stdout += d; });
-    proc.stderr.on('data', d => { stderr += d; });
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
-    return new Promise(res => {
-      let resolved = false;
-      const done = (code, error_type = null) => {
-        if (resolved) return;
-        resolved = true;
-        clearTimeout(timer);
-        res({ stdout, stderr, code, error_type });
-      };
-      proc.on('close', code => done(code, code !== 0 ? 'nonzero' : null));
-      proc.on('error', err => {
-        if (err.name === 'AbortError') done('timeout', 'timeout');
-        else if (err.code === 'ENOENT') done(-1, 'enoent');
-        else done(-1, 'spawn_error');
-      });
-    });
-  };
-}
 
 // ─── MCP Response Helpers ──────────────────────────────────────────────────────
 
@@ -65,7 +36,7 @@ function respondError(id, code, message) {
 const CONSULT_TOOL = {
   name: 'consult',
   description:
-    '并发调用 Claude CLI、Codex CLI、Gemini CLI，以 Model A/B/C 匿名形式返回三模型独立回答，' +
+    '并发调用默认核心 provider 和显式启用的可选 provider，以匿名形式返回独立回答，' +
     '供主 Claude 担任 Judge 进行盲评合并。',
   inputSchema: {
     type: 'object',
@@ -77,13 +48,18 @@ const CONSULT_TOOL = {
       },
       skip: {
         type: 'array',
-        items: { type: 'string', enum: ['claude', 'codex', 'gemini'] },
+        items: { type: 'string', enum: Object.keys(PROVIDERS) },
         description: '跳过指定模型（可多选）',
       },
       only: {
         type: 'string',
-        enum: ['claude', 'codex', 'gemini'],
+        enum: Object.keys(PROVIDERS),
         description: '只调用一个模型',
+      },
+      with: {
+        type: 'array',
+        items: { type: 'string', enum: Object.keys(PROVIDERS) },
+        description: '显式加入可选 provider（可多选）',
       },
       timeout_sec: {
         type: 'number',
@@ -130,6 +106,7 @@ async function handleConsult(args) {
     prompt,
     skip = [],
     only,
+    with: withProviders = [],
     timeout_sec = DEFAULT_TIMEOUT_S,
     blind = true,
     show_raw = false,
@@ -143,13 +120,14 @@ async function handleConsult(args) {
   // No-timeout sentinel: use 10 min cap so the process eventually ends
   const timeoutMs = timeout_sec === 0 ? 10 * 60 * 1000 : timeout_sec * 1000;
   const workDir = cwd ? resolve(cwd) : process.cwd();
-  const runProcess = makeRunner(timeoutMs, workDir);
+  const runner = makeRunner(timeoutMs, workDir);
 
   // Resolve active providers
   const skipList = only
-    ? ['claude', 'codex', 'gemini'].filter(n => n !== only)
+    ? Object.keys(PROVIDERS).filter(n => n !== only)
     : [...skip];
-  const activeProviders = getActiveProviders(skipList);
+  const selectedWith = only ? [only] : withProviders;
+  const activeProviders = getActiveProviders(skipList, selectedWith);
 
   if (activeProviders.length === 0) {
     throw new Error('No providers selected — check skip/only parameters.');
@@ -162,7 +140,7 @@ async function handleConsult(args) {
   // Run all providers in parallel
   const startTimes = Object.fromEntries(activeProviders.map(p => [p.name, Date.now()]));
   const settled = await Promise.allSettled(
-    activeProviders.map(p => runProcess(p.cmd, p.getArgs(fullPrompt)))
+    activeProviders.map(p => p.run(fullPrompt, runner))
   );
 
   // Normalize results

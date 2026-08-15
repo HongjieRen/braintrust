@@ -8,7 +8,7 @@
 
 ## MVP 定义
 
-**3×Generator + 1×Judge = 4 次 API 调用**
+**默认 3×Generator + 1×Judge = 4 次调用**。可选 provider 仅由 CLI `--with` 或 MCP `with` 显式加入。
 
 ```
 输入 → 并发生成(3) → 清洗归一化 → 单次Judge融合(1) → 输出+落盘
@@ -39,6 +39,7 @@ brantrust "解释 CAP 定理"                    # 默认：3 generator + 1 judg
 brantrust --no-judge "React vs Vue"          # 只并发收集
 brantrust --judge-model gemini "数据库选型"   # 切换 Judge
 brantrust --skip codex "量子计算"             # 跳过模型
+brantrust --with cursor --with kimi "代码评审" # 显式增加可选模型
 cat app.ts | brantrust "review 这段代码"      # stdin 管道
 brantrust --dir ~/project "项目分析"          # 工作目录
 brantrust --timeout 60 "快速问题"             # 超时
@@ -52,6 +53,7 @@ brantrust --strict "关键决策"                 # V2: 完整 Judge 流水线
 |------|------|------|
 | `"prompt"` | 必须 | 问题 |
 | `--skip <model>` | — | 跳过模型（可多次）|
+| `--with <provider>` | — | 显式加入可选 provider（可多次）|
 | `--judge-model` | `claude` | Judge 模型 |
 | `--no-judge` | false | 关闭 Judge |
 | `--timeout` | 120 | 超时秒数 |
@@ -72,7 +74,10 @@ brantrust --strict "关键决策"                 # V2: 完整 Judge 流水线
 |----------|------|---------|
 | Claude | `claude -p "$PROMPT" --output-format json --no-session-persistence` | `.result` |
 | Codex | `codex exec "$PROMPT" --json --skip-git-repo-check --ephemeral` | JSONL → `item.completed` → `item.text` |
-| Gemini | `gemini -p "$PROMPT" -o json` | 跳过 MCP 噪音前缀 → `.response` |
+| Gemini | `agy -p "$PROMPT" --output-format json --disable-slash-commands` | 跳过前缀噪音 → `.response` |
+| Cursor（可选） | headless JSON ask mode | `.result` |
+| Kimi（可选） | Claude JSON 适配器 | `KIMI_API_KEY`，Kimi Code endpoint `https://api.kimi.com/coding/` |
+| DeepSeek / Grok（可选） | HTTP API | 分别使用 `DEEPSEEK_API_KEY` / `XAI_API_KEY` |
 
 stderr 进度提示：`[Claude: 8.2s done] [Codex: running...] [Gemini: timeout]`
 

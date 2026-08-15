@@ -76,7 +76,7 @@ function main() {
   for (const [cmd, vArgs, installHint] of [
     ['claude', ['--version'],      'https://claude.ai/download'],
     ['codex',  ['--version'],      'npm i -g @openai/codex'],
-    ['gemini', ['--version'],      'npm i -g @google/gemini-cli'],
+    ['agy',    ['--version'],      'https://antigravity.google/docs/cli/install'],
   ]) {
     const ver = getVersion(cmd, vArgs);
     if (ver) {
@@ -85,6 +85,19 @@ function main() {
       check(cmd, false, `not found — ${installHint}`);
       allOk = false;
     }
+  }
+
+  // ── Optional providers ────────────────────────────────────────────────────
+  console.log('\nOptional providers:');
+  const cursorVersion = getVersion('cursor-agent', ['--version']);
+  check('cursor-agent', cursorVersion ? true : 'warn', cursorVersion || 'not found — enable with --with cursor');
+  for (const [name, variable] of [
+    ['kimi', 'KIMI_API_KEY'],
+    ['deepseek', 'DEEPSEEK_API_KEY'],
+    ['grok', 'XAI_API_KEY'],
+  ]) {
+    check(name, process.env[variable] ? true : 'warn',
+      process.env[variable] ? `${variable} configured` : `${variable} not set — optional`);
   }
 
   // ── MCP server ─────────────────────────────────────────────────────────────

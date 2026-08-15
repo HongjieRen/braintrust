@@ -116,7 +116,7 @@ fi
 
 echo ""
 echo "Checking CLI prerequisites:"
-for cmd in claude codex gemini; do
+for cmd in claude codex agy; do
   if command -v "$cmd" &>/dev/null; then
     VER=$("$cmd" --version 2>&1 | head -1 | cut -c1-40)
     ok "$cmd  ($VER)"
